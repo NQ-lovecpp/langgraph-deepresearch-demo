@@ -139,6 +139,9 @@ export default function App() {
         initial_search_query_count: initial_search_query_count,
         max_research_loops: max_research_loops,
         reasoning_model: model,
+        query_generator_model: model,
+        reflection_model: model,
+        answer_model: model,
       });
     },
     [thread]

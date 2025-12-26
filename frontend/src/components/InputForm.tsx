@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { SquarePen, Brain, Send, StopCircle, Zap, Cpu } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
@@ -18,6 +18,12 @@ interface InputFormProps {
   hasHistory: boolean;
 }
 
+interface GeminiModel {
+  name: string;
+  display_name: string;
+  description: string;
+}
+
 export const InputForm: React.FC<InputFormProps> = ({
   onSubmit,
   onCancel,
@@ -26,11 +32,55 @@ export const InputForm: React.FC<InputFormProps> = ({
 }) => {
   const [internalInputValue, setInternalInputValue] = useState("");
   const [effort, setEffort] = useState("medium");
-  const [model, setModel] = useState("gemini-2.5-flash-preview-04-17");
+  const [model, setModel] = useState("models/gemini-2.5-flash");
+  const [availableModels, setAvailableModels] = useState<GeminiModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(true);
+
+  // Fetch available models from backend
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const apiUrl = import.meta.env.DEV
+          ? "http://localhost:2024"
+          : "http://localhost:8123";
+        console.log("Fetching models from:", `${apiUrl}/api/models`);
+        const response = await fetch(`${apiUrl}/api/models`);
+        if (response.ok) {
+          const data = await response.json();
+          console.log("Models fetched successfully:", data.models.length, "models, source:", data.source);
+          setAvailableModels(data.models || []);
+        } else {
+          console.error("Failed to fetch models:", response.statusText);
+          // Fallback to default models
+          setAvailableModels([
+            { name: "models/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", description: "" },
+            { name: "models/gemini-2.5-pro", display_name: "Gemini 2.5 Pro", description: "" },
+          ]);
+        }
+      } catch (error) {
+        console.error("Error fetching models:", error);
+        // Fallback to default models
+        setAvailableModels([
+          { name: "models/gemini-1.5-flash", display_name: "Gemini 1.5 Flash", description: "" },
+          { name: "models/gemini-1.5-pro", display_name: "Gemini 1.5 Pro", description: "" },
+        ]);
+      } finally {
+        setModelsLoading(false);
+        console.log("Models loading complete");
+      }
+    };
+
+    fetchModels();
+  }, []);
 
   const handleInternalSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!internalInputValue.trim()) return;
+    console.log("Submit clicked, input:", internalInputValue, "effort:", effort, "model:", model);
+    if (!internalInputValue.trim()) {
+      console.log("Input is empty, not submitting");
+      return;
+    }
+    console.log("Calling onSubmit...");
     onSubmit(internalInputValue, effort, model);
     setInternalInputValue("");
   };
@@ -131,34 +181,38 @@ export const InputForm: React.FC<InputFormProps> = ({
               Model
             </div>
             <Select value={model} onValueChange={setModel}>
-              <SelectTrigger className="w-[150px] bg-transparent border-none cursor-pointer">
-                <SelectValue placeholder="Model" />
+              <SelectTrigger className="w-[200px] bg-transparent border-none cursor-pointer">
+                <SelectValue placeholder={modelsLoading ? "Loading..." : "Select Model"} />
               </SelectTrigger>
-              <SelectContent className="bg-neutral-700 border-neutral-600 text-neutral-300 cursor-pointer">
-                <SelectItem
-                  value="gemini-2.0-flash"
-                  className="hover:bg-neutral-600 focus:bg-neutral-600 cursor-pointer"
-                >
-                  <div className="flex items-center">
-                    <Zap className="h-4 w-4 mr-2 text-yellow-400" /> 2.0 Flash
-                  </div>
-                </SelectItem>
-                <SelectItem
-                  value="gemini-2.5-flash-preview-04-17"
-                  className="hover:bg-neutral-600 focus:bg-neutral-600 cursor-pointer"
-                >
-                  <div className="flex items-center">
-                    <Zap className="h-4 w-4 mr-2 text-orange-400" /> 2.5 Flash
-                  </div>
-                </SelectItem>
-                <SelectItem
-                  value="gemini-2.5-pro-preview-05-06"
-                  className="hover:bg-neutral-600 focus:bg-neutral-600 cursor-pointer"
-                >
-                  <div className="flex items-center">
-                    <Cpu className="h-4 w-4 mr-2 text-purple-400" /> 2.5 Pro
-                  </div>
-                </SelectItem>
+              <SelectContent className="bg-neutral-700 border-neutral-600 text-neutral-300 cursor-pointer max-h-[300px]">
+                {modelsLoading ? (
+                  <SelectItem value="loading" disabled>
+                    Loading models...
+                  </SelectItem>
+                ) : availableModels.length === 0 ? (
+                  <SelectItem value="none" disabled>
+                    No models available
+                  </SelectItem>
+                ) : (
+                  availableModels.map((m) => (
+                    <SelectItem
+                      key={m.name}
+                      value={m.name}
+                      className="hover:bg-neutral-600 focus:bg-neutral-600 cursor-pointer"
+                    >
+                      <div className="flex items-center">
+                        {m.name.includes("flash") ? (
+                          <Zap className="h-4 w-4 mr-2 text-yellow-400" />
+                        ) : (
+                          <Cpu className="h-4 w-4 mr-2 text-purple-400" />
+                        )}
+                        <span className="truncate max-w-[200px]" title={m.display_name}>
+                          {m.display_name.replace("models/", "")}
+                        </span>
+                      </div>
+                    </SelectItem>
+                  ))
+                )}
               </SelectContent>
             </Select>
           </div>
