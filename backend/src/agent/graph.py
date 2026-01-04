@@ -1,13 +1,14 @@
 import os
+from typing import Optional
 
 from agent.tools_and_schemas import SearchQueryList, Reflection
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage
+from langchain_core.language_models import BaseChatModel
 from langgraph.types import Send
 from langgraph.graph import StateGraph
 from langgraph.graph import START, END
 from langchain_core.runnables import RunnableConfig
-from google.genai import Client
 
 from agent.state import (
     OverallState,
@@ -15,7 +16,7 @@ from agent.state import (
     ReflectionState,
     WebSearchState,
 )
-from agent.configuration import Configuration
+from agent.configuration import Configuration, get_active_provider, get_provider_config
 from agent.prompts import (
     get_current_date,
     query_writer_instructions,
@@ -23,28 +24,128 @@ from agent.prompts import (
     reflection_instructions,
     answer_instructions,
 )
-from langchain_google_genai import ChatGoogleGenerativeAI
 from agent.utils import (
     get_citations,
     get_research_topic,
     insert_citation_markers,
     resolve_urls,
 )
+from agent.search_providers import (
+    get_search_provider,
+    format_exa_results_for_llm,
+)
 
 load_dotenv()
 
-if os.getenv("GEMINI_API_KEY") is None:
-    raise ValueError("GEMINI_API_KEY is not set")
+# Initialize provider-specific clients
+_active_provider = get_active_provider()
+_provider_config = get_provider_config()
 
-# Used for Google Search API
-genai_client = Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Google-specific client (only initialized if using Google provider)
+genai_client = None
+if _active_provider == "google":
+    from google.genai import Client
+    api_key = _provider_config.get("api_key") or os.getenv("GEMINI_API_KEY")
+    if api_key:
+        genai_client = Client(api_key=api_key)
+    else:
+        print("WARNING: Google provider selected but no GEMINI_API_KEY found")
+
+
+def get_llm(model_name: str, config: Configuration, temperature: float = 1.0) -> BaseChatModel:
+    """Get the appropriate LLM based on the provider configuration."""
+    provider = config.provider
+    
+    if provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        api_key = config.get_api_key()
+        return ChatGoogleGenerativeAI(
+            model=model_name,
+            temperature=temperature,
+            max_retries=2,
+            api_key=api_key,
+        )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            max_retries=2,
+            api_key=config.get_api_key(),
+            base_url=config.get_base_url(),
+        )
+    elif provider == "local":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            max_retries=2,
+            api_key="not-needed",  # Local server doesn't need API key
+            base_url=config.get_base_url(),
+        )
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+
+
+def get_structured_output(llm: BaseChatModel, schema, config: Configuration):
+    """Get structured output from LLM with provider-specific handling."""
+    import json
+    from langchain_core.output_parsers import PydanticOutputParser
+    
+    provider = config.provider
+    
+    if provider == "google":
+        # Google Gemini supports native structured output
+        return llm.with_structured_output(schema)
+    else:
+        # For OpenRouter and local, use manual JSON parsing
+        parser = PydanticOutputParser(pydantic_object=schema)
+        
+        class StructuredLLM:
+            def __init__(self, llm, parser, schema):
+                self.llm = llm
+                self.parser = parser
+                self.schema = schema
+            
+            def invoke(self, prompt):
+                # Add JSON format instructions to the prompt
+                format_instructions = f"""
+You MUST respond with a valid JSON object that matches this schema:
+{json.dumps(self.schema.model_json_schema(), indent=2)}
+
+Only respond with the JSON object, no additional text or markdown formatting.
+"""
+                full_prompt = f"{prompt}\n\n{format_instructions}"
+                response = self.llm.invoke(full_prompt)
+                
+                # Extract content
+                content = response.content if hasattr(response, 'content') else str(response)
+                
+                # Try to extract JSON from the response
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.startswith("```"):
+                    content = content[3:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+                
+                # Parse and validate
+                try:
+                    data = json.loads(content)
+                    return self.schema(**data)
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"Failed to parse JSON response: {e}\nResponse: {content}")
+        
+        return StructuredLLM(llm, parser, schema)
 
 
 # Nodes
 def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerationState:
     """LangGraph node that generates search queries based on the User's question.
 
-    Uses Gemini 2.0 Flash to create an optimized search queries for web research based on
+    Uses the configured LLM to create optimized search queries for web research based on
     the User's question.
 
     Args:
@@ -60,14 +161,9 @@ def generate_query(state: OverallState, config: RunnableConfig) -> QueryGenerati
     if state.get("initial_search_query_count") is None:
         state["initial_search_query_count"] = configurable.number_of_initial_queries
 
-    # init Gemini 2.0 Flash
-    llm = ChatGoogleGenerativeAI(
-        model=configurable.query_generator_model,
-        temperature=1.0,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
-    structured_llm = llm.with_structured_output(SearchQueryList)
+    # Get the appropriate LLM
+    llm = get_llm(configurable.query_generator_model, configurable, temperature=1.0)
+    structured_llm = get_structured_output(llm, SearchQueryList, configurable)
 
     # Format the prompt
     current_date = get_current_date()
@@ -93,9 +189,9 @@ def continue_to_web_research(state: QueryGenerationState):
 
 
 def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
-    """LangGraph node that performs web research using the native Google Search API tool.
+    """LangGraph node that performs web research using the configured search provider.
 
-    Executes a web search using the native Google Search API tool in combination with Gemini 2.0 Flash.
+    Executes a web search using either Google Search API or Exa based on configuration.
 
     Args:
         state: Current graph state containing the search query and research loop count
@@ -104,8 +200,19 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     Returns:
         Dictionary with state update, including sources_gathered, research_loop_count, and web_research_results
     """
-    # Configure
     configurable = Configuration.from_runnable_config(config)
+    provider = configurable.provider
+    
+    if provider == "google":
+        # Use Google's native search capability
+        return _web_research_google(state, configurable)
+    else:
+        # Use Exa search for OpenRouter and local providers
+        return _web_research_exa(state, configurable)
+
+
+def _web_research_google(state: WebSearchState, configurable: Configuration) -> OverallState:
+    """Web research using Google's native search API."""
     formatted_prompt = web_searcher_instructions.format(
         current_date=get_current_date(),
         research_topic=state["search_query"],
@@ -136,6 +243,40 @@ def web_research(state: WebSearchState, config: RunnableConfig) -> OverallState:
     }
 
 
+def _web_research_exa(state: WebSearchState, configurable: Configuration) -> OverallState:
+    """Web research using Exa search API."""
+    # Get Exa search provider
+    exa_api_key = configurable.get_exa_api_key()
+    search_provider = get_search_provider(configurable.provider, exa_api_key)
+    
+    # Execute search
+    search_results = search_provider.search(state["search_query"], num_results=5)
+    
+    # Format results for LLM
+    formatted_text, sources = format_exa_results_for_llm(search_results, state["id"])
+    
+    # Use LLM to summarize the search results
+    llm = get_llm(configurable.query_generator_model, configurable, temperature=0)
+    
+    summary_prompt = f"""Based on the following search results, provide a comprehensive summary that answers the research topic.
+Include relevant facts, data, and insights from the sources. Make sure to reference the sources by their URLs.
+
+Research Topic: {state["search_query"]}
+
+Search Results:
+{formatted_text}
+
+Provide a well-organized summary with source references:"""
+
+    response = llm.invoke(summary_prompt)
+    
+    return {
+        "sources_gathered": sources,
+        "search_query": [state["search_query"]],
+        "web_research_result": [response.content],
+    }
+
+
 def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
     """LangGraph node that identifies knowledge gaps and generates potential follow-up queries.
 
@@ -162,14 +303,11 @@ def reflection(state: OverallState, config: RunnableConfig) -> ReflectionState:
         research_topic=get_research_topic(state["messages"]),
         summaries="\n\n---\n\n".join(state["web_research_result"]),
     )
-    # init Reasoning Model
-    llm = ChatGoogleGenerativeAI(
-        model=reasoning_model,
-        temperature=1.0,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
-    result = llm.with_structured_output(Reflection).invoke(formatted_prompt)
+    
+    # Get the appropriate LLM
+    llm = get_llm(reasoning_model, configurable, temperature=1.0)
+    structured_llm = get_structured_output(llm, Reflection, configurable)
+    result = structured_llm.invoke(formatted_prompt)
 
     return {
         "is_sufficient": result.is_sufficient,
@@ -241,26 +379,22 @@ def finalize_answer(state: OverallState, config: RunnableConfig):
         summaries="\n---\n\n".join(state["web_research_result"]),
     )
 
-    # init Reasoning Model, default to Gemini 2.5 Flash
-    llm = ChatGoogleGenerativeAI(
-        model=reasoning_model,
-        temperature=0,
-        max_retries=2,
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
+    # Get the appropriate LLM
+    llm = get_llm(reasoning_model, configurable, temperature=0)
     result = llm.invoke(formatted_prompt)
 
     # Replace the short urls with the original urls and add all used urls to the sources_gathered
     unique_sources = []
+    result_content = result.content
     for source in state["sources_gathered"]:
-        if source["short_url"] in result.content:
-            result.content = result.content.replace(
+        if source["short_url"] in result_content:
+            result_content = result_content.replace(
                 source["short_url"], source["value"]
             )
             unique_sources.append(source)
 
     return {
-        "messages": [AIMessage(content=result.content)],
+        "messages": [AIMessage(content=result_content)],
         "sources_gathered": unique_sources,
     }
 

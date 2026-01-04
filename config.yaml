@@ -1,0 +1,59 @@
+# ============================================================
+# Deep Research Agent Configuration
+# ============================================================
+# Choose one of the following providers by setting 'active_provider'
+# Options: "google", "openrouter", "local"
+# ============================================================
+
+active_provider: "openrouter"  # Change this to switch providers
+
+# ============================================================
+# SECTION 1: Google Gemini + Google Search (Original Setup)
+# ============================================================
+google:
+  # Google Gemini API Key (get from https://makersuite.google.com/app/apikey)
+  api_key: ""
+  
+  # Model names for different tasks
+  query_generator_model: "models/gemini-2.5-flash"
+  reflection_model: "models/gemini-2.5-flash"
+  answer_model: "models/gemini-2.5-flash"
+
+# ============================================================
+# SECTION 2: OpenRouter + Exa Search
+# ============================================================
+openrouter:
+  # OpenRouter API Key (get from https://openrouter.ai/keys)
+  api_key: "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"
+  
+  # OpenRouter base URL
+  base_url: "https://openrouter.ai/api/v1"
+  
+  # Model names for different tasks (OpenRouter model IDs)
+  # See available models at: https://openrouter.ai/models
+  query_generator_model: "allenai/olmo-3.1-32b-think:free"
+  reflection_model: "allenai/olmo-3.1-32b-think:free"
+  answer_model: "allenai/olmo-3.1-32b-think:free"
+  
+  # Exa Search API Key (get from https://exa.ai/)
+  exa_api_key: "4bf3690f-ce7e-4966-aeee-67c2f938b0c6"
+
+# ============================================================
+# SECTION 3: Local LlamaServer + Exa Search
+# ============================================================
+local:
+  # Local llama-server URL
+  # Start with: llama-server -hf ggml-org/gpt-oss-20b-GGUF --n-cpu-moe 12 -c 32768 --jinja --no-mmap
+  base_url: "http://localhost:8080/v1"
+  
+  # Model name (usually "gpt-3.5-turbo" for OpenAI-compatible endpoints)
+  model_name: "gpt-3.5-turbo"
+  
+  # Use the same model for all tasks in local mode
+  query_generator_model: "gpt-3.5-turbo"
+  reflection_model: "gpt-3.5-turbo"
+  answer_model: "gpt-3.5-turbo"
+  
+  # Exa Search API Key (get from https://exa.ai/)
+  exa_api_key: "4bf3690f-ce7e-4966-aeee-67c2f938b0c6"
+

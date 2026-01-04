@@ -32,7 +32,7 @@ export const InputForm: React.FC<InputFormProps> = ({
 }) => {
   const [internalInputValue, setInternalInputValue] = useState("");
   const [effort, setEffort] = useState("medium");
-  const [model, setModel] = useState("models/gemini-2.5-flash");
+  const [model, setModel] = useState("");  // Will be set after models load
   const [availableModels, setAvailableModels] = useState<GeminiModel[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
 
@@ -47,23 +47,31 @@ export const InputForm: React.FC<InputFormProps> = ({
         const response = await fetch(`${apiUrl}/api/models`);
         if (response.ok) {
           const data = await response.json();
-          console.log("Models fetched successfully:", data.models.length, "models, source:", data.source);
-          setAvailableModels(data.models || []);
+          console.log("Models fetched successfully:", data.models.length, "models, source:", data.source, "provider:", data.provider);
+          const models = data.models || [];
+          setAvailableModels(models);
+          // Set default model to first available model
+          if (models.length > 0 && !model) {
+            setModel(models[0].name);
+            console.log("Default model set to:", models[0].name);
+          }
         } else {
           console.error("Failed to fetch models:", response.statusText);
           // Fallback to default models
-          setAvailableModels([
-            { name: "models/gemini-2.5-flash", display_name: "Gemini 2.5 Flash", description: "" },
-            { name: "models/gemini-2.5-pro", display_name: "Gemini 2.5 Pro", description: "" },
-          ]);
+          const fallback = [
+            { name: "anthropic/claude-3.5-sonnet", display_name: "Claude 3.5 Sonnet", description: "" },
+          ];
+          setAvailableModels(fallback);
+          if (!model) setModel(fallback[0].name);
         }
       } catch (error) {
         console.error("Error fetching models:", error);
         // Fallback to default models
-        setAvailableModels([
-          { name: "models/gemini-1.5-flash", display_name: "Gemini 1.5 Flash", description: "" },
-          { name: "models/gemini-1.5-pro", display_name: "Gemini 1.5 Pro", description: "" },
-        ]);
+        const fallback = [
+          { name: "anthropic/claude-3.5-sonnet", display_name: "Claude 3.5 Sonnet", description: "" },
+        ];
+        setAvailableModels(fallback);
+        if (!model) setModel(fallback[0].name);
       } finally {
         setModelsLoading(false);
         console.log("Models loading complete");
@@ -93,7 +101,7 @@ export const InputForm: React.FC<InputFormProps> = ({
     }
   };
 
-  const isSubmitDisabled = !internalInputValue.trim() || isLoading;
+  const isSubmitDisabled = !internalInputValue.trim() || isLoading || !model;
 
   return (
     <form

@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenRouter O4 推理助手</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            width: 100%;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 90vh;
+            max-height: 800px;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .message.assistant {
+            display: flex;
+            justify-content: flex-start;
+        }
+
+        .message-content {
+            max-width: 75%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            position: relative;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .message-content {
+            background: white;
+            color: #333;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .reasoning-box {
+            background: #f0f4ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .reasoning-box .title {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .reasoning-box .title::before {
+            content: "🧠";
+            font-size: 18px;
+        }
+
+        .reasoning-content {
+            color: #555;
+            white-space: pre-wrap;
+        }
+
+        .answer-box {
+            margin-top: 15px;
+            padding: 15px;
+            background: #fff;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .answer-box .title {
+            font-weight: 600;
+            color: #764ba2;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .answer-box .title::before {
+            content: "✨";
+            font-size: 18px;
+        }
+
+        .answer-content {
+            color: #333;
+            white-space: pre-wrap;
+            line-height: 1.8;
+        }
+
+        .typing-indicator {
+            display: none;
+            padding: 15px 20px;
+            background: white;
+            border-radius: 18px;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            max-width: 75px;
+        }
+
+        .typing-indicator.show {
+            display: inline-block;
+        }
+
+        .typing-indicator span {
+            height: 10px;
+            width: 10px;
+            background: #667eea;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 2px;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.3;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+
+        .input-container {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        #userInput {
+            flex: 1;
+            padding: 12px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+            resize: none;
+            max-height: 120px;
+            min-height: 45px;
+            font-family: inherit;
+        }
+
+        #userInput:focus {
+            border-color: #667eea;
+        }
+
+        #effortLevel {
+            padding: 12px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 14px;
+            outline: none;
+            background: white;
+            cursor: pointer;
+            transition: border-color 0.3s;
+        }
+
+        #effortLevel:focus {
+            border-color: #667eea;
+        }
+
+        #sendBtn {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        #sendBtn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #sendBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #999;
+            text-align: center;
+        }
+
+        .empty-state-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+        }
+
+        .empty-state h2 {
+            font-size: 24px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .empty-state p {
+            font-size: 16px;
+        }
+
+        .error-message {
+            background: #fee;
+            color: #c33;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin: 10px 20px;
+            border-left: 4px solid #c33;
+        }
+
+        /* 滚动条样式 */
+        .chat-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .chat-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .chat-container::-webkit-scrollbar-thumb {
+            background: #ccc;
+            border-radius: 4px;
+        }
+
+        .chat-container::-webkit-scrollbar-thumb:hover {
+            background: #999;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .container {
+                height: 100vh;
+                max-height: none;
+                border-radius: 0;
+            }
+
+            .message-content {
+                max-width: 85%;
+            }
+
+            .input-wrapper {
+                flex-direction: column;
+            }
+
+            #effortLevel {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 OpenRouter O4 推理助手</h1>
+            <p>体验强大的 AI 推理能力，实时查看思考过程</p>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="empty-state">
+                <div class="empty-state-icon">💬</div>
+                <h2>开始对话</h2>
+                <p>输入您的问题，我会展示详细的推理过程</p>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <select id="effortLevel">
+                    <option value="low">Low Effort</option>
+                    <option value="medium" selected>Medium Effort</option>
+                    <option value="high">High Effort</option>
+                </select>
+                <textarea 
+                    id="userInput" 
+                    placeholder="输入您的问题..." 
+                    rows="1"
+                ></textarea>
+                <button id="sendBtn">发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const userInput = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const effortLevel = document.getElementById('effortLevel');
+
+        let isProcessing = false;
+
+        // 自动调整输入框高度
+        userInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        // 回车发送（Shift+Enter换行）
+        userInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        sendBtn.addEventListener('click', sendMessage);
+
+        function clearEmptyState() {
+            const emptyState = chatContainer.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+        }
+
+        function addMessage(content, isUser = false) {
+            clearEmptyState();
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+            
+            messageDiv.appendChild(contentDiv);
+            chatContainer.appendChild(messageDiv);
+            
+            scrollToBottom();
+            
+            return messageDiv;
+        }
+
+        function addTypingIndicator() {
+            clearEmptyState();
+            
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message assistant';
+            messageDiv.id = 'typingIndicator';
+            
+            const indicator = document.createElement('div');
+            indicator.className = 'typing-indicator show';
+            indicator.innerHTML = '<span></span><span></span><span></span>';
+            
+            messageDiv.appendChild(indicator);
+            chatContainer.appendChild(messageDiv);
+            
+            scrollToBottom();
+            
+            return messageDiv;
+        }
+
+        function removeTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message || isProcessing) return;
+
+            // 添加用户消息
+            addMessage(message, true);
+            
+            // 清空输入框
+            userInput.value = '';
+            userInput.style.height = 'auto';
+            
+            // 禁用发送按钮
+            isProcessing = true;
+            sendBtn.disabled = true;
+            sendBtn.textContent = '思考中...';
+
+            // 显示输入指示器
+            addTypingIndicator();
+
+            try {
+                // 创建助手消息容器
+                const assistantMessageDiv = document.createElement('div');
+                assistantMessageDiv.className = 'message assistant';
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                
+                // 创建推理框
+                const reasoningBox = document.createElement('div');
+                reasoningBox.className = 'reasoning-box';
+                reasoningBox.innerHTML = '<div class="title">推理过程</div><div class="reasoning-content"></div>';
+                
+                // 创建答案框
+                const answerBox = document.createElement('div');
+                answerBox.className = 'answer-box';
+                answerBox.innerHTML = '<div class="title">答案</div><div class="answer-content"></div>';
+                
+                contentDiv.appendChild(reasoningBox);
+                contentDiv.appendChild(answerBox);
+                assistantMessageDiv.appendChild(contentDiv);
+
+                const reasoningContent = reasoningBox.querySelector('.reasoning-content');
+                const answerContent = answerBox.querySelector('.answer-content');
+
+                let reasoning = '';
+                let answer = '';
+
+                // 发起 SSE 请求
+                const response = await fetch('http://localhost:5000/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        effort: effortLevel.value
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                removeTypingIndicator();
+                chatContainer.appendChild(assistantMessageDiv);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') {
+                                continue;
+                            }
+
+                            try {
+                                const json = JSON.parse(data);
+                                
+                                if (json.type === 'reasoning') {
+                                    reasoning += json.content;
+                                    reasoningContent.textContent = reasoning;
+                                } else if (json.type === 'answer') {
+                                    answer += json.content;
+                                    answerContent.textContent = answer;
+                                } else if (json.type === 'error') {
+                                    throw new Error(json.content);
+                                }
+
+                                scrollToBottom();
+                            } catch (e) {
+                                if (data.trim()) {
+                                    console.error('Failed to parse JSON:', data, e);
+                                }
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                removeTypingIndicator();
+                console.error('Error:', error);
+                
+                const errorDiv = document.createElement('div');
+                errorDiv.className = 'error-message';
+                errorDiv.textContent = `错误: ${error.message}`;
+                chatContainer.appendChild(errorDiv);
+                
+                scrollToBottom();
+            } finally {
+                isProcessing = false;
+                sendBtn.disabled = false;
+                sendBtn.textContent = '发送';
+            }
+        }
+
+        // 页面加载时聚焦输入框
+        userInput.focus();
+    </script>
+</body>
+</html>
+
+
+
+

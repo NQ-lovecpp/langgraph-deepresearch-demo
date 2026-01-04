@@ -4,8 +4,9 @@ import pathlib
 from fastapi import FastAPI, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from google.genai import Client
 from dotenv import load_dotenv
+
+from agent.configuration import get_active_provider, get_provider_config
 
 load_dotenv()
 
@@ -52,9 +53,38 @@ def create_frontend_router(build_dir="../frontend/dist"):
     return StaticFiles(directory=build_path, html=True)
 
 
+@app.get("/api/provider")
+async def get_provider_info():
+    """Get information about the active provider."""
+    provider = get_active_provider()
+    provider_config = get_provider_config()
+    
+    return {
+        "active_provider": provider,
+        "has_api_key": bool(provider_config.get("api_key") or provider_config.get("exa_api_key")),
+    }
+
+
 @app.get("/api/models")
 async def list_models():
-    """List available Gemini models from Google API in real-time."""
+    """List available models based on the active provider."""
+    import asyncio
+    
+    provider = get_active_provider()
+    provider_config = get_provider_config()
+    
+    if provider == "google":
+        return await _list_google_models(provider_config)
+    elif provider == "openrouter":
+        return await _list_openrouter_models(provider_config)
+    elif provider == "local":
+        return await _list_local_models(provider_config)
+    else:
+        return {"models": [], "source": "unknown", "error": f"Unknown provider: {provider}"}
+
+
+async def _list_google_models(provider_config: dict):
+    """List available Google Gemini models."""
     import asyncio
     
     # Fallback models in case API call fails
@@ -84,7 +114,9 @@ async def list_models():
     def _fetch_models_from_google():
         """Fetch models from Google API (runs in thread pool)."""
         try:
-            api_key = os.getenv("GEMINI_API_KEY")
+            from google.genai import Client
+            
+            api_key = provider_config.get("api_key") or os.getenv("GEMINI_API_KEY")
             if not api_key:
                 print("WARN: GEMINI_API_KEY not set, using fallback models")
                 return {"models": fallback_models, "fetched": False, "error": "No API key"}
@@ -156,6 +188,7 @@ async def list_models():
         return {
             "models": result["models"],
             "source": "google_api" if result["fetched"] else "fallback",
+            "provider": "google",
             "error": result.get("error")
         }
     except Exception as e:
@@ -164,7 +197,167 @@ async def list_models():
         return {
             "models": fallback_models,
             "source": "fallback",
+            "provider": "google",
             "error": error_msg
+        }
+
+
+async def _list_openrouter_models(provider_config: dict):
+    """List available OpenRouter models."""
+    import asyncio
+    import httpx
+    
+    # Fallback models for OpenRouter
+    fallback_models = [
+        {
+            "name": "anthropic/claude-3.5-sonnet",
+            "display_name": "Claude 3.5 Sonnet",
+            "description": "Anthropic's most capable model"
+        },
+        {
+            "name": "anthropic/claude-3-haiku",
+            "display_name": "Claude 3 Haiku",
+            "description": "Fast and efficient Claude model"
+        },
+        {
+            "name": "openai/gpt-4o",
+            "display_name": "GPT-4o",
+            "description": "OpenAI's flagship model"
+        },
+        {
+            "name": "openai/gpt-4o-mini",
+            "display_name": "GPT-4o Mini",
+            "description": "Fast and affordable GPT-4 variant"
+        },
+        {
+            "name": "google/gemini-pro-1.5",
+            "display_name": "Gemini Pro 1.5",
+            "description": "Google's advanced Gemini model"
+        },
+        {
+            "name": "meta-llama/llama-3.1-70b-instruct",
+            "display_name": "Llama 3.1 70B",
+            "description": "Meta's open-source large model"
+        },
+    ]
+    
+    async def _fetch_models():
+        try:
+            api_key = provider_config.get("api_key", "")
+            if not api_key:
+                return {"models": fallback_models, "fetched": False, "error": "No API key"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    "https://openrouter.ai/api/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=10.0,
+                )
+                
+                if response.status_code != 200:
+                    return {"models": fallback_models, "fetched": False, "error": f"API error: {response.status_code}"}
+                
+                data = response.json()
+                models = []
+                
+                for model in data.get("data", []):
+                    # Filter for text generation models
+                    model_id = model.get("id", "")
+                    
+                    # Skip embedding models and other non-chat models
+                    if "embed" in model_id.lower() or "vision" in model_id.lower():
+                        continue
+                    
+                    models.append({
+                        "name": model_id,
+                        "display_name": model.get("name", model_id),
+                        "description": model.get("description", ""),
+                    })
+                
+                if models:
+                    return {"models": models[:50], "fetched": True, "error": None}  # Limit to 50 models
+                else:
+                    return {"models": fallback_models, "fetched": False, "error": "No models found"}
+                
+        except Exception as e:
+            return {"models": fallback_models, "fetched": False, "error": str(e)}
+    
+    try:
+        result = await _fetch_models()
+        return {
+            "models": result["models"],
+            "source": "openrouter_api" if result["fetched"] else "fallback",
+            "provider": "openrouter",
+            "error": result.get("error")
+        }
+    except Exception as e:
+        return {
+            "models": fallback_models,
+            "source": "fallback",
+            "provider": "openrouter",
+            "error": str(e)
+        }
+
+
+async def _list_local_models(provider_config: dict):
+    """List models available on local llama-server."""
+    import asyncio
+    import httpx
+    
+    # Default model for local llama-server
+    default_models = [
+        {
+            "name": "gpt-3.5-turbo",
+            "display_name": "Local Model",
+            "description": "Currently loaded model on llama-server"
+        },
+    ]
+    
+    async def _fetch_models():
+        try:
+            base_url = provider_config.get("base_url", "http://localhost:8080/v1")
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{base_url}/models",
+                    timeout=5.0,
+                )
+                
+                if response.status_code != 200:
+                    return {"models": default_models, "fetched": False, "error": f"API error: {response.status_code}"}
+                
+                data = response.json()
+                models = []
+                
+                for model in data.get("data", []):
+                    models.append({
+                        "name": model.get("id", "gpt-3.5-turbo"),
+                        "display_name": model.get("id", "Local Model"),
+                        "description": "Locally running model",
+                    })
+                
+                if models:
+                    return {"models": models, "fetched": True, "error": None}
+                else:
+                    return {"models": default_models, "fetched": False, "error": "No models found"}
+                
+        except Exception as e:
+            return {"models": default_models, "fetched": False, "error": str(e)}
+    
+    try:
+        result = await _fetch_models()
+        return {
+            "models": result["models"],
+            "source": "local_api" if result["fetched"] else "fallback",
+            "provider": "local",
+            "error": result.get("error")
+        }
+    except Exception as e:
+        return {
+            "models": default_models,
+            "source": "fallback",
+            "provider": "local",
+            "error": str(e)
         }
 
 
